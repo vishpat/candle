@@ -60,9 +60,9 @@ impl LogisticRegression {
             .matmul(&deltas.unsqueeze(D::Minus1)?)?
             .broadcast_div(&Tensor::new(m as f32, &self.device)?)?;
         let gradient = gradient.squeeze(D::Minus1)?.squeeze(D::Minus1)?;
-        let scaling_factor = Tensor::new((learning_rate / m as f32), &self.device)?;
-        let scaled_theta = self.thetas.broadcast_mul(&scaling_factor)?;
-
+        self.thetas = self
+            .thetas
+            .sub(&gradient.broadcast_mul(&Tensor::new(learning_rate, &self.device)?)?)?;
         Ok(())
     }
 }
