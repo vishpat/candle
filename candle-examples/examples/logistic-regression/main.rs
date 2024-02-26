@@ -2,10 +2,11 @@ extern crate csv;
 use anyhow::Result;
 use candle::{Device, Tensor, D};
 use candle_nn::ops::sigmoid;
+use clap::Parser;
 use core::panic;
 use std::fs::File;
+use std::iter;
 use std::rc::Rc;
-use clap::Parser;
 
 struct Dataset {
     pub training_data: Tensor,
@@ -29,34 +30,39 @@ impl LogisticRegression {
         Ok(Self { thetas, device })
     }
 
-    fn predict(&self, x: &Tensor) -> Result<Tensor> {
+    fn hypothesis(&self, x: &Tensor) -> Result<Tensor> {
         Ok(sigmoid(&x.matmul(&self.thetas.unsqueeze(1)?)?.squeeze(1)?)?)
     }
 
     #[allow(unused)]
-    fn cost(&self, x: &Tensor, y: &Tensor) -> Result<Tensor> {
-        let m = y.shape().dims1()?;
-        let predictions = self.predict(x)?;
-        let deltas = predictions.sub(y)?;
-        let cost = deltas
-            .mul(&deltas)?
-            .mean(D::Minus1)?
-            .div(&Tensor::new(2.0 * m as f32, &self.device)?)?;
+    fn cost(&self, x: &Tensor, y: &Tensor, device: Rc<Device>) -> Result<Tensor> {
+        let (m, n) = x.shape().dims2()?;
+        let H = self.hypothesis(x)?;
+        let log_H = H.log()?;
+        let one_array = Tensor::from_iter(iter::repeat(1.0f32).take(n), &device)?;
+        let log_1_minus_H = one_array.sub(&H)?.log()?;
+
+        let one_array = Tensor::from_iter(iter::repeat(1.0f32).take(m), &device)?;
+        let one_minus_y = one_array.sub(y)?;
+        let cost = y
+            .mul(&log_H)?
+            .add(&one_minus_y.mul(&log_1_minus_H)?)?
+            .broadcast_div(&Tensor::new(-1.0 * m as f32, &device)?)?;
         Ok(cost)
     }
 
     fn train(&mut self, x: &Tensor, y: &Tensor, learning_rate: f32) -> Result<()> {
         let m = y.shape().dims1()?;
-        let predictions = self.predict(x)?;
+        let predictions = self.hypothesis(x)?;
         let deltas = predictions.sub(y)?;
         let gradient = x
             .t()?
             .matmul(&deltas.unsqueeze(D::Minus1)?)?
             .broadcast_div(&Tensor::new(m as f32, &self.device)?)?;
         let gradient = gradient.squeeze(D::Minus1)?.squeeze(D::Minus1)?;
-        self.thetas = self
-            .thetas
-            .sub(&gradient.broadcast_mul(&Tensor::new(learning_rate, &self.device)?)?)?;
+        let scaling_factor = Tensor::new((learning_rate / m as f32), &self.device)?;
+        let scaled_theta = self.thetas.broadcast_mul(&scaling_factor)?;
+
         Ok(())
     }
 }
@@ -64,7 +70,11 @@ impl LogisticRegression {
 const LEARNING_RATE: f32 = 0.01;
 const ITERATIONS: i32 = 100000;
 
-fn income_dataset(training_file_path: &str, test_file_path: &str, device: &Device) -> Result<Dataset> {
+fn income_dataset(
+    training_file_path: &str,
+    test_file_path: &str,
+    device: &Device,
+) -> Result<Dataset> {
     // https://www.kaggle.com/datasets/nimapourmoradi/adult-incometrain-test-dataset/data
 
     Ok(Dataset {
@@ -105,7 +115,7 @@ fn main() -> Result<()> {
         )?;
     }
 
-    let predictions = model.predict(&dataset.test_data)?;
+    let predictions = model.hypothesis(&dataset.test_data)?;
 
     Ok(())
 }
